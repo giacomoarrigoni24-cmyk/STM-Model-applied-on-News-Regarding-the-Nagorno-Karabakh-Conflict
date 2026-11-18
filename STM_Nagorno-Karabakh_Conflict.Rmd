@@ -1,0 +1,1048 @@
+---
+title: "Structural Topic Modelling for News Regarding the Nagorno-Karabakh Conflict"
+author: "Arrigoni Giacomo, Badolato Francesco"
+date: "2026-09-04"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: cosmo
+---
+
+# Abstract {-}
+The Nagorno-Karabakh conflict represents one of the most instructive cases of contemporary information warfare: a territory contested for decades, in which Russia, Turkey, Armenia, and Azerbaijan project deeply divergent interests through their respective spheres of influence. This study aims to analyze the media front by applying Structural Topic Modelling (STM), a probabilistic framework that allows document metadata to be incorporated as covariates in the estimation of model parameters. This approach makes it possible to investigate who talks about what, when, and with what vocabulary.
+STM (analyzed using the `stm` library) does not merely identify topics, but highlights the complex underlying geopolitical chessboard.
+The analysis revealed noteworthy facets of the conflict, such as adherence to the political and military agendas of specific geopolitical blocs, which can be analyzed mathematically through graphical outputs and statistical results.
+
+# Dataset Construction via Python
+*(This preliminary dataset creation phase was developed in Python. The scripts used are made available in a dedicated folder.)*
+
+The preliminary phase of the analysis involved designing a Python pipeline dedicated to extracting a large dataset of news articles on the conflict. We decided to use the MediaCloud API to extract the URLs of articles matching our search queries. This Python solution enabled targeted web scraping, leveraging localized queries calibrated for the geographic targets of greatest ethnic and strategic relevance (submitting queries in local languages—for instance, "Qarabağ", "Нагорный Карабах", or "Dağlık Karabağ"—so as to avoid sampling bias driven by a single search language).
+The subsequent phase involved the actual web scraping, utilizing the `newspaper3k` API (specifically, the `Article` module) to extract the full text of the articles. This process does not always succeed due to various anti-scraping protection systems on news websites. Overall, out of approximately $4,000$ collected URLs, $1,737$ unique texts were successfully retrieved.
+This multilingual strategy introduced an additional challenge: translating texts from various languages into English. To accomplish this, we relied on machine translation libraries leveraging the Google Translate API. Some texts written in more complex or less common scripts and languages (such as certain Arabic dialects, Traditional Chinese, Cyrillic, and Khmer) required specialized processing using AI-based translators (such as Ollama or DeepL).
+
+Data collection was strictly filtered around *four critical time windows* for the conflict:
+
+1. *The 44-Day War* (September – November 2020).
+
+2. *The Armenian Political Crisis* (January – July 2021).
+
+3. *Pre-2023 Escalation and Russian Involvement* (January – July 2022).
+
+4. *The Final Azerbaijani Offensive, Dissolution of the Republic of Artsakh, and Armenian Exodus* (September – October 2023).
+
+Another challenge in building the dataset involved assigning a nationality to each article based on its source domain. During this stage, we found that several outlets were not genuine news publishers, but rather so-called *Pink Slime* websites—sites lacking an independent editorial staff that merely republish content from other outlets. We deemed it appropriate to label these outlets as "Big News Network," as this is the parent network to which they belong.
+A final issue concerned assigning nationalities to outlets with `.com` or similar generic top-level domains. In these cases, we identified the outlet's nationality via Google searches, specifically assigning the nationality based on the outlet's legal headquarters.
+
+```{r import_data}
+# The cleaned dataset used for the analysis is stored in articles_NK_war_V2.RData, loaded via the load() command.
+load("C:/Users/giaco/OneDrive - Università degli Studi di Milano-Bicocca/Desktop/Antigravity/Text_mining_26/articles_NK_war_V2.RData")
+```
+This `.RData` file contains the final dataset merging the collected articles—translated into English—with the metadata associated with each news item.
+
+This report focuses on statistical analysis without delving into the granular military history of the conflict, while still providing the essential background needed to understand the topic modelling results and the methodological choices made.
+
+# Methodological and Theoretical Introduction
+
+## Probabilistic Models for Topic Modelling
+Automated text analysis makes it possible to extract meaning from vast document corpora that would be impossible to process manually. In this context, generative probabilistic models such as *Latent Dirichlet Allocation* (LDA; Blei et al., 2003) have served for years as the standard for uncovering latent themes. However, classical models analyze documents under particularly restrictive assumptions, starting from the premise of complete independence across documents.
+
+To overcome this limitation, Roberts et al. (2016, 2019) formalized and implemented the **Structural Topic Model (STM)**, explicitly designed for research and experimentation in the *Social Sciences*. The STM approach is highly innovative because it recognizes that vocabulary is not explained solely by the documents themselves: texts are written by authors embedded within complex institutional, geographic, and chronological constructs that shape their content.
+
+Rather than training unconstrained multinomial distributions, the STM statistical framework assimilates document **metadata**, empirically transforming them into **structural covariates** that dynamically inform parameter estimation. In doing so, STM investigates not only *what* is being said, but also *who* is saying it and in *which time window* it occurs, making it ideally suited for the political analysis of news coverage regarding a multi-front polarized conflict.
+
+Formally, STM operates along two core dimensions that define its generative process:
+
+1. **Topical Prevalence:** Controls document-level topic weights, estimating the extent to which an external covariate (e.g., a specific phase of the war) encourages or suppresses the occurrence of a given topic. The prior distributions of topic proportions $\theta_d$ for each document $d$ follow a Logistic-Normal regression parameterized by the covariate matrix $X_d$:
+$$ \theta_{d} \mid X_{d}\gamma, \Sigma \sim \text{LogisticNormal}(X_{d}\gamma, \Sigma) $$
+
+2. **Topical Content (Lexical Framing):** The assumption relaxed by STM is the existence of a single universal *Bag-of-Words* for a topic regardless of covariates. The model allows the lexical paradigm to shift depending on who is speaking. *Framing* is formalized by parameterizing the probability of word $v$ appearing in topic $k$ under the influence of the categorical covariate $y_d$:
+$$ \beta_{d, k, v} = \frac{\exp\left( m_v + \kappa_{k,v} + \kappa_{y_d,v} + \kappa_{k, y_d, v} \right)} {\sum_{v'} \exp\left( m_{v'} + \kappa_{k,v'} + \kappa_{y_d,v'} + \kappa_{k, y_d, v'} \right)} $$
+In this exact formulation (Roberts et al., 2016), in addition to the global baseline log-frequency $m_v$, the model sums the topic-specific deviation $\kappa_{k,v}$, the covariate-specific lexical deviation $\kappa_{y_d,v}$, and the topic-covariate interaction $\kappa_{k, y_d, v}$.
+
+Qualitatively, once estimation is complete, the interpretive usefulness of the resulting topics is evaluated using algorithmic metrics specifically designed for linguistic differentiation:
+* **FREX (FRequency and EXclusivity):** Penalizes words that have high overall probability in the model but are shared across too many topics. Developed by Bischof and Airoldi (2012), this metric computes the harmonic mean of the Empirical CDFs of frequency and exclusivity (weighting importance via $\omega$, whose default value is $0.7$ to favor distinctly exclusive terms):
+$$ \text{FREX}_{k,v} = \left( \frac{\omega}{\text{ECDF}(F_{k,v})} + \frac{1-\omega}{\text{ECDF}(E_{k,v})} \right)^{-1} $$
+* In addition, **Semantic Coherence** (Mimno et al., 2011) is used to verify empirically that the top words of a topic co-occur with high logical frequency within the same original documents.
+
+---
+
+# Environment Setup
+
+For the purposes of this report, code chunks are displayed (`echo=TRUE`), while console warnings and messages are suppressed (`warning=FALSE`, `message=FALSE`) to keep the final document readable.
+Below, we load the required libraries and briefly describe their roles.
+
+```{r setup_env, echo=TRUE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# Load required libraries
+library(ggplot2)
+library(tidyverse)
+library(tm)
+library(naniar)
+library(wordcloud)
+library(stm)
+library(SnowballC)
+library(slam)
+library(writexl)
+library(quanteda)
+library(philentropy)
+library(reshape2)
+library(downloadthis)
+```
+
+We imported `tidyverse` for data manipulation and visualization (alongside `ggplot2` and `naniar`), `tm` and `quanteda` (Benoit et al., 2018) for text management, and `stm` for statistical topic modelling.
+The libraries `slam` and `SnowballC` were loaded for sparse matrix handling and word stemming, respectively, while `writexl` was used to export intermediate datasets during data preparation.
+For model comparison, `philentropy` and `reshape2` were used to compute the Jensen-Shannon Divergence and visualize the alignment matrix.
+Finally, `downloadthis` was included to attach the Python script archive directly to the rendered HTML report.
+
+```{r explore_data}
+# Inspect total number of sampled articles:
+cat("Current subset size:", nrow(articles_NK_war_V2), "documents\n")
+```
+
+---
+
+# Exploratory Data Analysis (EDA)
+
+Once the final dataset was compiled, organized, and translated, we conducted an exploratory analysis to examine the temporal and geographic distribution of the collected news articles.
+
+```{r grafici, fig.width=10, fig.height=4, out.width="100%"}
+# Plot 1: Temporal distribution of collected news articles
+grafico_temporale <- ggplot(articles_NK_war_V2, aes(x = Data)) +
+  geom_histogram(binwidth = 30, fill = "steelblue", color = "white", alpha = 0.9) +
+  theme_minimal() +
+  labs(
+    title = "Monthly Distribution of Collected News Articles (2020-2023)",
+    x = "Date", y = "Number of Articles"
+  ) +
+  scale_x_date(date_breaks = "6 months", date_labels = "%b %Y") +
+  theme(plot.title = element_text(face = "bold"))
+
+# Plot 2: Source Heterogeneity and Balance
+fonti <- articles_NK_war_V2 |> count(Nazionalita_Testata, sort = TRUE)
+grafico_nazioni <- ggplot(fonti, aes(x = reorder(Nazionalita_Testata, -n), y = n)) +
+  geom_bar(fill = "#de5858", alpha = 0.8, stat = "identity") +
+  theme_minimal() +
+  labs(
+    title = "Distribution of Articles by Country",
+    x = "Country", y = "Number of Articles"
+  ) +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+
+# Display plots
+grafico_temporale
+grafico_nazioni
+```
+
+This visualization makes clear why integrating covariates into `stm` is essential: ignoring the imbalance between Azerbaijani, Turkish, or Russian sources and European outlets would prevent us from capturing differences in positioning and linguistic nuance across the various actors involved.
+Furthermore, the peak of articles is concentrated in 2020, the year of the 44-Day War, which ended with Azerbaijan's victory and the annexation of part of Nagorno-Karabakh. In 2023, the final Azerbaijani offensive led to the complete annexation of the region, the Armenian exodus, and the dissolution of the Republic of Artsakh, marking the end of a *de facto* state entity that had existed for over $30$ years.
+The other peaks correspond to 2021—marked by events surrounding the ceasefire implementation, border realignments, and a major political and humanitarian crisis in Armenia—and 2022, when critical tensions along the Armenia–Azerbaijan border (including the blockade of the Lachin Corridor) and armed clashes foreshadowed the 2023 offensive.
+
+We also observe that Germany, Italy, and the United States are overrepresented in the dataset relative to their direct geopolitical footprint in the region.
+This overrepresentation stems from the initial sampling languages: the first round of searches used obvious English/international terms (such as *Nagorno-Karabakh*, *Artsakh*, *Armenia*, *Azerbaijan*), producing a high share of Italian, German, and English articles.
+Once this imbalance was identified, targeted queries in local languages were conducted as described earlier. Given the substantial time required to scrape and translate articles and the limited query quota available, we retained these articles while explicitly accounting for source origin in our covariate modeling.
+
+```{r mappa_conflitto, echo=FALSE, out.width="100%"}
+knitr::include_graphics("C:/Users/giaco/OneDrive - Università degli Studi di Milano-Bicocca/Desktop/Antigravity/Text_mining_26/Markdown/Immagine_conflitto_NK_ISPI.jpg")
+```
+<div style="text-align: center; font-size: 0.85em; font-style: italic; color: #666; margin-top: 5px;">
+  <b>Illustrative Note:</b> Summary map of the territorial layout and contested borders in the Nagorno-Karabakh conflict.
+</div>
+
+---
+
+# Text Pre-processing
+
+## Standardization, Stopwords, and Custom Dictionaries
+Constructing a clean Document-Term Matrix (DTM) requires thorough corpus normalization.
+Before standard text cleaning, a dataset of this nature requires several preliminary steps: converting text to lowercase, removing URLs, line-break hyphens, and standalone numbers, stripping news agency tags, and standardizing morphological or spelling variants that carry equivalent analytical meaning (e.g., replacing "armenian" with "armenia"). Because standard stemmers such as `SnowballC` do not always unify irregular demonyms, proper names, or transliterations, we manually inspected the vocabulary and constructed a custom replacement dictionary.
+Subsequently, we applied standard cleaning steps (removing punctuation, numbers, and symbols), removed stopwords (functional words lacking standalone semantic content), and performed stemming to reduce words to their morphological roots.
+
+```{r stopwords_clean}
+# --- 1. PRELIMINARY OPERATIONS ---
+
+# 1.a Helper cleaning functions
+removeURL <- function(x) gsub("(f|ht)tp[s]?://[^[:space:]]*", "", x)
+replace_hyphen <- function(x) gsub("-", " ", x)
+removeNumPunct <- function(x) gsub("[^[:alpha:][:space:]]*", "", x)
+
+# 1.b List of news agency tags to remove
+news_agencies_stopwords <- c(
+  "reuters", "ap", "associated", "afp", "bbc", "cnn", "al", "jazeera",
+  "tass", "rferl", "azertac", "armenpress", "panarmenian", "trend",
+  "apa", "anadolu", "trt", "sputnik", "interfax", "eurasianet", "guardian",
+  "nytimes", "washington", "post", "bloomberg", "azernewsaz"
+)
+
+# 1.c Custom dictionary for terms problematic under standard stemming
+dizionario <- data.frame(
+  pattern = c(
+    "\\brussians?\\b|\\brussian\\b", "\\bsoviet\\b", "\\bazeris?\\b|\\bazerbaijanis?\\b",
+    "\\barmenians?\\b", "\\bkarabakh\\b|\\bkarabach\\b|\\bnagorno.karabakh\\b",
+    "\\bfighters?\\b|\\bmilitants?\\b|\\bcombatants?\\b", "\\bpeacekeepers?\\b|\\bpeacekeeping\\b",
+    "\\bministri\\b|\\bministeri\\b", "\\bukrainian\\b", "\\bkazakh\\b", "\\bturkish\\b",
+    "\\bt.kiy\\b", "\\berdo.an\\b", "\\bb.hner\\b", "\\bant.nio\\b", "\\bg.es\\b", "\\bj.gen\\b",
+    "\\balreadi\\b", "\\barmi\\b", "\\bciti\\b", "\\bcountri\\b", "\\bmani\\b", "\\bfamili\\b",
+    "\\balli\\b", "\\bheavi\\b", "\\bheavili\\b", "\\binjuri\\b", "\\bcommuniti\\b", "\\benergi\\b",
+    "\\bpeac\\b", "\\bforc\\b", "\\bpresid\\b", "\\bdefens\\b", "\\bceasefir\\b", "\\bpolic\\b",
+    "\\bpolit\\b", "\\bsecur\\b", "\\brepubl\\b", "\\bauthor\\b",
+    "\\bturkey\\b|\\btürkiy[a-z]*\\b|\\bturkish\\b|\\bturks?\\b|\\bturkic\\b|\\banatol\\b|\\banatoli\\b|\\banatolia\\b",
+    "\\beurope\\b|\\beuropeans?\\b", "\\bfrance\\b|\\bfrench\\b", "\\bsyria\\b|\\bsyrians?\\b",
+    "\\bukraine\\b|\\bukrainians?\\b", "\\bgeorgia\\b|\\bgeorgians?\\b",
+    "\\bnikol\\b|\\bpashinyan\\b|\\bpashinian\\b", "\\bilham\\b|\\baliyev\\b|\\baliev\\b",
+    "\\brecep\\b|\\btayyip\\b|\\berdogan\\b|\\berdoğan\\b", "\\bvladimir\\b|\\bputin\\b",
+    "\\bpresidents?\\b|\\bpresidential\\b", "\\bpolitics\\b|\\bpolitical\\b|\\bpoliticians?\\b",
+    "\\bparliaments?\\b|\\bparliamentary\\b", "\\beconomy\\b|\\beconomics?\\b|\\beconomical\\b",
+    "\\bdiplomats?\\b|\\bdiplomacy\\b|\\bdiplomatic\\b",
+    "\\bmilitary\\b|\\bmilitaries\\b|\\bmilitarily\\b", "\\bterror\\b|\\bterrorists?\\b|\\bterrorism\\b",
+    "\\baggression\\b|\\baggressors?\\b|\\baggressive\\b", "\\breact\\b|\\breactions?\\b|\\breacting\\b"
+  ),
+  sostituzione = c(
+    "russia", "russia", "azerbaijan", "armenia", "karabakh", "fighter", "peacekeeper",
+    "minist", "ukrain", "kazakhstan", "turkey",
+    "turkey", "erdogan", "böhner", "antónio", "güneş", "jürgen",
+    "already", "army", "city", "country", "many", "family", "ally", "heavy", "heavily", "injury", "community", "energy",
+    "peace", "force", "president", "defense", "ceasefire", "police", "politics", "security", "republic", "authority",
+    "turkey", "europe", "france", "syria", "ukraine", "georgia",
+    "pashinyan", "aliyev", "erdogan", "putin",
+    "president", "politic", "parliament", "econom", "diplomat",
+    "military", "terror", "aggress", "react"
+  ),
+  stringsAsFactors = FALSE
+)
+
+# Vectorized application of cleaning functions (faster than sapply)
+testo_temp <- articles_NK_war_V2$Testo_Inglese |>
+  removeURL() |>
+  replace_hyphen() |>
+  removeNumPunct()
+
+for (i in seq_len(nrow(dizionario))) {
+  testo_temp <- gsub(dizionario$pattern[i], dizionario$sostituzione[i], testo_temp, ignore.case = TRUE, perl = TRUE)
+}
+
+articles_NK_war_V2$Testo_Inglese_processed <- testo_temp
+
+
+# --- 2. SUBSEQUENT OPERATIONS (Stopwords Compilation) ---
+my_stopwords <- readLines("https://gist.githubusercontent.com/sebleier/554280/raw/7e0e4a1ce04c2bb7bd41089c9821dbcf6d0c786c/NLTK's%2520list%2520of%2520english%2520stopwords")
+
+web_scraping_stopwords <- c(
+  "cookie", "cookies", "policy", "privacy", "terms", "conditions",
+  "subscribe", "newsletter", "sign", "log", "login", "register",
+  "read", "more", "click", "here", "share", "facebook", "twitter",
+  "whatsapp", "email", "advertisement", "ad", "sponsored", "copyright",
+  "reserved", "rights", "menu", "home", "search", "page", "link",
+  "video", "photo", "image", "gallery", "browser", "app", "download"
+)
+journalistic_stopwords <- c(
+  "said", "told", "added", "reported", "according", "stated",
+  "claims", "claimed", "announced", "noted", "stressed", "news",
+  "agency", "press", "media", "source", "sources", "report",
+  "reports", "article", "interview", "correspondent", "reporter",
+  "briefing", "statement", "published", "updated", "author",
+  "written", "headline", "editor", "editorial", "journal", "journalist",
+  "issued", "commented", "declared", "confirmed"
+)
+time_stopwords <- c(
+  "yesterday", "today", "tomorrow", "monday", "tuesday", "wednesday",
+  "thursday", "friday", "saturday", "sunday", "week", "month",
+  "year", "morning", "evening", "afternoon", "daily", "weekly",
+  "lately", "recently", "earlier", "late", "january", "february",
+  "march", "april", "may", "june", "july", "august", "september",
+  "october", "november", "december", "two"
+)
+formal_transition_stopwords <- c(
+  "also", "however", "therefore", "thus", "furthermore", "moreover",
+  "although", "despite", "whether", "within", "without", "among",
+  "including", "since", "would", "could", "should", "may", "might", "must"
+)
+
+stopwords_custom <- readLines("C:/Users/giaco/OneDrive - Università degli Studi di Milano-Bicocca/Desktop/Antigravity/Text_mining_26/nagorno_stopwords_complete.txt", warn = FALSE)
+
+# Combine all stopword lists and news agency tags
+all_stopwords <- unique(c(
+  my_stopwords, stopwords(language = "en"), web_scraping_stopwords,
+  journalistic_stopwords, time_stopwords, news_agencies_stopwords,
+  formal_transition_stopwords, stopwords_custom
+))
+```
+
+## Definition of Covariates for the STM Model and Subsequent Corpus Refinement
+
+Using the `stm` package, we define the covariates that will be incorporated into the full structural model. Specifically, we introduce `Polo_Geopolitico`, which captures the geopolitical alignment of the news outlet's home country (assigned via legal headquarters as described above), and `conflict_phase`, which identifies the historical phase of the conflict to which each article belongs.
+Next, we refine the corpus through stemming (via `textProcessor()`) and prune infrequent terms that appear in fewer than $10$ documents (via `prepDocuments()`). Setting `lower.thresh = 10` prevents the emergence of noisy, spurious topics, a threshold choice empirically supported by the diagnostic curves below.
+
+```{r stm_prep, results='hide'}
+# --- DEFINITION OF STRUCTURAL COVARIATES ---
+# Covariates are added directly to the main dataset prior to running textProcessor() so that a single processed corpus object can be shared across all estimated models.
+
+# Countries are grouped into geopolitical blocs relative to the conflict (a partially subjective classification corroborated by institutional sources). Countries such as Iran and Lebanon are grouped as pro-Armenia, while Azerbaijan, Turkey, Israel, Morocco, Qatar, Saudi Arabia, and Pakistan are grouped as pro-Baku. Russia and CIS countries are grouped separately due to their distinct regional interests and peacekeeping role.
+# Publication dates are partitioned into the four sampled phases of the conflict.
+
+articles_NK_war_V2 <- articles_NK_war_V2 |>
+  mutate(Polo_Geopolitico = case_when(
+    Nazionalita_Testata %in% c("Armenia", "Iran", "Lebanon") ~ "1_Pro_Armenia_Axis",
+    Nazionalita_Testata %in% c(
+      "Azerbaijan", "Turkey", "Israel", "Morocco",
+      "Qatar", "Saudi Arabia", "Pakistan"
+    ) ~ "2_Pro_Baku_Axis",
+    Nazionalita_Testata %in% c(
+      "Russia", "Kazakhstan", "Belarus", "Kyrgyzstan",
+      "Tajikistan", "Uzbekistan", "Georgia", "Ukraine",
+      "Moldova"
+    ) ~ "3_Russia_and_CIS",
+    TRUE ~ "4_Rest_of_World"
+  )) |>
+  mutate(Polo_Geopolitico = as.factor(Polo_Geopolitico)) |>
+  mutate(Year_cat = as.factor(substr(as.character(Data), 1, 4))) |>
+  mutate(conflict_phase = case_when(
+    Data >= as.Date("2020-09-01") & Data <= as.Date("2020-12-31") ~ "1_War_2020",
+    Data >= as.Date("2021-01-01") & Data <= as.Date("2021-12-31") ~ "2_Armenian_Political_Crisis_2021",
+    Data >= as.Date("2022-01-01") & Data <= as.Date("2022-12-31") ~ "3_Ukraine_War_Outbreak_2022",
+    Data >= as.Date("2023-01-01") & Data <= as.Date("2023-12-31") ~ "4_Final_Offensive_Lachin_2023"
+  )) |>
+  mutate(conflict_phase = factor(conflict_phase,
+    levels = c(
+      "1_War_2020", "2_Armenian_Political_Crisis_2021",
+      "3_Ukraine_War_Outbreak_2022", "4_Final_Offensive_Lachin_2023"
+    ),
+    ordered = TRUE
+  ))
+
+# STM function that executes stemming and indexed mapping (creates a bag-of-words representation with term frequencies)
+corpus_meta <- textProcessor(articles_NK_war_V2$Testo_Inglese_processed,
+  metadata = articles_NK_war_V2,
+  customstopwords = all_stopwords
+)
+
+# Using plotRemoved(), we empirically inspect the pruning curves as the frequency threshold increases. The total number of removed documents remains flat (equal to 1) across thresholds.
+# Both the number of unique words removed and the total tokens removed show a clear deceleration around lower.thresh = 10, justifying this cutoff.
+
+plotRemoved(corpus_meta$documents, lower.thresh = seq(1, 60, by = 2))
+
+docs_10 <- prepDocuments(
+  documents = corpus_meta$documents,
+  vocab = corpus_meta$vocab,
+  meta = corpus_meta$meta,
+  lower.thresh = 10
+)
+
+# prepDocuments internally drops documents that do not meet the threshold.
+# The indices of removed documents are saved to keep documents and metadata aligned during model estimation.
+removed <- docs_10$docs.removed
+meta_clean <- docs_10$meta
+```
+
+## Preview of the Cleaning Process
+To illustrate the effect of pre-processing, we extract the first words of the first article after transformation.
+Beyond verifying the cleaning pipeline, this example demonstrates how the `stm` library stores documents and words internally. Unlike `tm` and `quanteda`, texts are not stored in sequential narrative order, but rather in a *Bag-of-Words* format.
+Specifically, each document is represented as an unordered "bag" in which only word identity and multiplicity within the document matter. Computationally, the model constructs a global vocabulary assigning a unique numerical index to every distinct term, and compresses each document into two integer vectors: one containing the vocabulary indices present in that text and the other containing their corresponding counts. To the algorithm, two sentences composed of the exact same words in reverse order are mathematically identical—representing a deliberate trade-off between computational efficiency and syntactic order.
+
+```{r preview_clean, echo=TRUE}
+# Extract vocabulary indices present in the first document
+indici_parole_doc1 <- docs_10$documents[[1]][1, ]
+
+# Map indices back to vocabulary terms
+parole_modello <- docs_10$vocab[indici_parole_doc1]
+
+# Display the first 50 words (ordered by internal STM vocabulary index, not narrative order)
+incipit_stm <- paste(head(parole_modello, 50), collapse = "; ")
+
+# Retrieve metadata directly from meta_clean
+data_formattata <- format(meta_clean$Data[1], "%d/%m/%Y")
+
+cat(
+  "Date: ", data_formattata, "\n",
+  "Outlet Country: ", as.character(meta_clean$Nazionalita_Testata[1]), "\n",
+  "Words passed to the model (Bag-of-Words):\n",
+  incipit_stm, "\n"
+)
+```
+
+---
+
+# Base Model (Without Covariates)
+
+## Methodological Introduction
+
+The baseline STM model without covariates overcomes a fundamental limitation of *Latent Dirichlet Allocation* (Blei et al., 2003), the classical topic modelling approach. LDA rests on a particularly restrictive statistical assumption: the independence of topics. In LDA, document-level topic proportions ($\theta_d$) are drawn from a **Dirichlet** distribution. While computationally convenient (as the Dirichlet is conjugate to the multinomial), this specification implies that the presence of one topic cannot be positively or negatively correlated with the presence of another.
+
+In news media analysis, however, themes are frequently interconnected. Within our Nagorno-Karabakh corpus, for example, an article discussing "Military Tactics" is highly likely to also address "Arms Supplies," whereas it is statistically unlikely to focus on distant topics such as "German Domestic Politics." We therefore adopt a more flexible specification.
+
+To overcome this constraint prior to introducing external covariates, Blei and Lafferty (2007) introduced the **Correlated Topic Model (CTM)**. CTM replaces the Dirichlet prior with a **Logistic-Normal** distribution, allowing the model to capture positive or negative thematic co-occurrence structures.
+
+Formally, the generative process for topic proportions $\theta_d$ in an unconstrained CTM is defined as:
+
+1. Draw a latent vector $\eta_d$ from a multivariate Normal distribution:
+   $$\eta_d \sim \mathcal{N}(\mu, \Sigma)$$
+   where $\mu$ is the vector of global topic means and $\Sigma$ is the **covariance matrix** capturing correlations (positive or negative) across topics.
+
+2. Map $\eta_d$ onto the probability simplex (so that topic proportions sum to $1$) via the *softmax* transformation:
+   $$\theta_{d,k} = \frac{\exp(\eta_{d,k})}{\sum_{i=1}^{K} \exp(\eta_{d,i})}$$
+Here, $\Sigma$ captures inter-topic correlations directly in Gaussian space prior to transformation.
+
+This Logistic-Normal architecture forms the foundation for the next methodological step: the **Structural Topic Model (STM)**. Whereas CTM assumes the mean $\mu$ is a global constant shared across the entire corpus, STM models this mean as a linear function of document-level covariates ($X_d\gamma$), such as news outlet origin and conflict phase.
+
+## Optimal Number of Topics Selection and Model Estimation
+Before estimating the model, we must select the optimal number of topics $K$. The STM workflow provides the `searchK()` function, which trains models across candidate values of $K$ and compares diagnostic metrics: *Held-Out Likelihood* (predictive accuracy on held-out words), *Semantic Coherence* (internal lexical cohesion), and *Residuals* (overdispersion). Because `searchK()` is computationally intensive, we load the pre-computed results saved previously (and do the same for the fitted models).
+
+For completeness, we briefly describe the `init.type = "Spectral"` option used in `stm()`.
+Parameter estimation in STM relies on a **Variational Expectation-Maximization (VEM)** algorithm. Because the objective function is non-convex, VEM is inherently susceptible to *multimodality*: depending on initialization, the algorithm can converge to different local optima, yielding structurally different semantic clusters across runs.
+
+To eliminate this instability, we adopt **spectral initialization** (Arora et al., 2012) by setting `init.type = "Spectral"`.
+This procedure is grounded in the **method of moments** and the decomposition of the corpus word co-occurrence matrix. Rather than relying on random starting values, spectral initialization computes a deterministic and consistent starting point.
+
+Adopting spectral initialization provides two decisive methodological advantages:
+1. **Reproducibility:** Given identical hyperparameters and input matrices, the model produces the exact same set of topics every time, eliminating stochastic initialization variance without requiring a random seed.
+2. **Superior Semantic Coherence:** The statistical literature demonstrates that spectrally initialized models tend to avoid poor local optima, yielding topics that are empirically more cohesive and semantically interpretable than those obtained via random initialization.
+
+```{r base_model}
+# Optimal K search results (base model, without covariates)
+# risultati_ricerca <- searchK(documents = docs,
+#                             vocab = vocab,
+#                             K = valori_k,
+#                             meta = NULL,
+#                             init.type = "Spectral")
+risultati_ricerca <- readRDS("C:/Users/giaco/OneDrive - Università degli Studi di Milano-Bicocca/Desktop/Antigravity/Text_mining_26/k_optimization_results_1.rds")
+plot(risultati_ricerca)
+```
+
+Based on the diagnostic curves, $K = 20$ offers the best trade-off between semantic coherence and predictive performance. We therefore estimate the base model with $20$ topics.
+
+```{r base_model_estimate}
+# modello_base_20 <- stm(documents = docs_10$documents,
+#                        vocab = docs_10$vocab,
+#                        K = 20,
+#                        data = NULL,
+#                        init.type = "Spectral",
+#                        verbose = TRUE)
+modello_base_20 <- read_rds("C:/Users/giaco/OneDrive - Università degli Studi di Milano-Bicocca/Desktop/Antigravity/Text_mining_26/modello_no_cov_20.rds")
+```
+
+## Topic Exploration
+The output of `labelTopics()` displays the $20$ estimated topics alongside their top terms ranked under four metrics: **Highest Prob** (highest absolute probability within the topic), **FREX** (FRequency and EXclusivity, which penalizes terms shared across many topics), **Lift** (the ratio of a term's probability in topic $k$ to its marginal corpus probability), and **Score** (which weights a word's topic probability by the log-ratio deviation relative to its average log-probability across all other topics).
+We also plot the expected corpus proportions of the $20$ topics labeled by their top **FREX** terms, along with the semantic quality diagnostic plot.
+
+```{r labels}
+# Extracted topic labels
+labels_base_20 <- labelTopics(modello_base_20)
+labels_base_20
+```
+
+Below, we display the expected topic proportions across the corpus. As expected, topics concerning football or Vatican diplomacy appear less frequently, as do topics tied to events occurring later in the timeline that had less time to accumulate coverage (such as Turkey's Black Sea grain deal or the outbreak of the war in Ukraine).
+
+```{r base_diag, results='hide'}
+# Expected proportions of the 20 topics and their most characteristic FREX terms
+plot(modello_base_20,
+  type = "summary", xlim = c(0, 0.3), text.cex = 0.8, labeltype = "frex",
+  main = "Expected Topic Proportions (Base Model, K=20)"
+)
+
+# Semantic quality plot: topics in the top-right are cohesive and exclusive, whereas those in the bottom-left indicate potential noise
+topicQuality(
+  model = modello_base_20,
+  documents = docs_10$documents,
+  xlab = "Semantic Coherence",
+  ylab = "Exclusivity (FREX)",
+  main = "Base Model Quality: Coherence vs Exclusivity"
+)
+```
+
+## Topic Correlation Network
+Below, we visualize co-occurrence patterns among topics within the same document. An edge connecting two nodes indicates that the two topics tend to appear together within the same article, signaling conceptual proximity.
+
+```{r base_corr}
+correlazioni_base <- topicCorr(modello_base_20)
+plot(correlazioni_base,
+  vertex.label.cex = 0.9,
+  vertex.size = 5,
+  vertex.label.dist = 1.3,
+  vertex.label.color = "darkblue",
+  main = "Topic Correlation Network (Model Without Covariates)"
+)
+```
+
+## Interpretation of Topics and Correlations
+
+Graphical inspection of the covariance matrix ($\Sigma$) estimated by the Structural Topic Model allows us to move beyond isolated topics and examine the macro-structure of the corpus. The resulting Topic Network (where nodes represent topics and edges represent statistically significant positive correlations) reveals a clear polarization of the corpus into distinct semantic clusters.
+
+From inspecting the graph, three main discursive macro-areas and a set of peripheral/noise topics emerge:
+
+### 1. Armed Conflict and Regional Diplomacy Cluster
+This dense sub-network forms the core of the Nagorno-Karabakh conflict coverage:
+
+* Strong co-occurrence links **Topic 2**—battlefield military dynamics (*militari, territori, ceasefir, provoc, peace*)—and **Topic 7**—wartime impact on civilians and territory (*helicopt, civilian, launch, shell*)—together with **Topic 17**, representing immediate diplomatic appeals (*immedi, hostil, negoti, condemn*), and **Topic 16**, covering territorial control and leadership statements (*explain, separatist, aliyev*).
+
+### 2. Humanitarian Crisis and Domestic Politics Cluster
+A second well-defined cluster connects the humanitarian consequences of the war to domestic political fallout in Armenia:
+
+* **Topic 9**, centered on the infrastructural blockade (*blockad, lachin, road, food*), correlates strongly with **Topic 6**, which frames the crisis through international law and atrocity prevention (*genocid, humanitarian, ocampo, atroc*; see Moreno Ocampo, 2023).
+* These two themes connect directly to **Topic 3**, which captures institutional backlash and the governmental crisis in Armenia (*pashinyan, resign, opposit, protest*).
+
+### 3. Geopolitical Chessboard and International Diplomacy
+This dense network situates the conflict within the broader international relations and macroeconomic system:
+
+* **Topic 4** — Technological warfare and surveillance (*drone, bayraktar, weapon, technolog*), examining how unmanned systems altered tactical balances on the battlefield.
+* **Topic 5** — Multilateral diplomacy, reflecting Western and international mediation efforts (*summit, biden, macron, bilater*).
+* **Topic 10** — Russian sphere of influence, framing the Kremlin's posture and power dynamics across the post-Soviet space (*putin, kazakhstan, tokayev, nato*).
+* **Topic 12** — Turkish regional activism, contextualizing Ankara's backing of Baku within its broader power projection in the Mediterranean and Middle East (*libya, syria, ankara, turkey*).
+* **Topic 18** — Black Sea–Caucasus axis, highlighting intersections between Caucasus diplomacy and Russian-Turkish resource negotiations (*grain, sochi, black sea, deal*).
+* **Topic 19** — Ukraine War linkage, reflecting media framing of the conflict alongside Russia's invasion of Ukraine (*ukraine, kiev, zelenskiy, attack*).
+* **Topic 11** — Economic impact and sanctions, capturing financial repercussions, state budgets, and sanctions (*compani, billion, export, budget*). Notably, inspecting top documents for this topic via `quanteda` (Benoit et al., 2018) revealed several off-topic articles (e.g., online casino advertisements or unrelated economic news) captured through coincidental keyword overlap.
+
+### 4. Noise and Isolated Peripheral Topics
+Noise-related topics cluster together in one region of the graph, though still loosely connected to Cluster 3:
+
+* **Topic 15** — Electoral/Sports ambiguity, a hybrid topic blending electoral vocabulary with sports reporting (*ball, team, vote, match*), driven by articles referencing the conflict through statements by football players such as Armenian midfielder Henrikh Mkhitaryan (AS Roma).
+* **Topic 13** — Religious dimension, capturing Vatican appeals and spiritual reflections on the conflict (*pope, franci, church, prayer*), reflecting Vatican News as a recurring source in the corpus.
+* **Topic 14** — European domestic politics, capturing German and European parliamentary reactions (*germani, grey, cdu, bundestag*). Notably, the term *grey* refers to political controversy in Germany regarding the Turkish ultranationalist group *Grey Wolves*.
+* **Topic 1** — Generic conversational vocabulary lacking standalone thematic content (*say, one, want, know*).
+* **Topic 20** — Editorial and web-scraping boilerplate (*reader, headlin, student, school*).
+* **Topic 8** — Represents Russia's role as regional security guarantor alongside the CSTO (Collective Security Treaty Organization), a post-Soviet security alliance (*Russia, Peacekeeping, CSTO, Exercise*). This topic stands disconnected from the rest of the network and ranks as the third most prevalent topic in the corpus, underscoring its distinct structural role.
+
+Overall, the correlation structure remains coherent: peripheral topics connect to core clusters either through shared journalistic vocabulary or because actors like the Vatican or sports figures commented directly on the humanitarian toll of the war.
+
+---
+
+## Model Insights
+We next use the estimated base model to examine quantitative patterns across publication years, indirectly testing our interpretive hypotheses regarding how thematic attention evolved between 2020 and 2023.
+
+```{r composition_topic years}
+# Evolution of macro-topic shares across publication years
+theta_df <- as.data.frame(modello_base_20$theta)
+colnames(theta_df) <- paste0("Topic_", 1:20)
+theta_df$Anno <- meta_clean$Year_cat
+
+theta_macro <- theta_df |>
+  pivot_longer(cols = starts_with("Topic"), names_to = "Topic_ID", values_to = "Value") |>
+  mutate(Topic_Num = as.numeric(gsub("Topic_", "", Topic_ID))) |>
+  mutate(MacroArea = case_when(
+    Topic_Num %in% c(2, 4, 6, 7, 9, 16) ~ "1. Crisis and Conflict",
+    Topic_Num %in% c(5, 8, 10, 12, 17) ~ "2. International Geopolitics",
+    Topic_Num %in% c(3) ~ "3. Domestic Politics (Armenia)",
+    TRUE ~ "4. Noise or Mixed Structures"
+  ))
+
+plot_data <- theta_macro |>
+  group_by(Anno, MacroArea) |>
+  summarise(Proporzione = mean(Value), .groups = "drop")
+
+ggplot(plot_data, aes(x = Anno, y = Proporzione, fill = MacroArea)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  scale_fill_brewer(palette = "Set1") +
+  theme_minimal() +
+  labs(
+    title = "Evolution of Thematic Composition (2020-2023)",
+    x = "Year", y = "Text Share (%)", fill = "Macro-Area"
+  ) +
+  theme(legend.position = "bottom", legend.direction = "vertical")
+```
+
+As shown in the chart, the algorithm not only captured the frontline military narrative (peaking in 2020), but cleanly isolated the domestic political backlash in Armenia, whose institutional peak occurred the following year (2021) through protests, resignation demands, and snap parliamentary elections. Meanwhile, background noise remained relatively stable over time.
+
+### Deep Dive into Specific Topics
+We further examine topic composition across specific subsets of documents—starting with articles published immediately after the September 2023 ceasefire and how they load onto Topic 2 (ceasefire and military resolution).
+
+```{r composition_topic 2}
+# The Ceasefire (September 2023)
+# Filter documents published on or after September 20, 2023
+idx_peace_2023 <- which(meta_clean$Data >= "2023-09-20")
+
+theta_2023 <- as.data.frame(modello_base_20$theta[idx_peace_2023, ])
+colnames(theta_2023) <- paste0("Topic_", 1:20)
+theta_2023$Doc_ID <- paste0("Doc_", idx_peace_2023)
+
+theta_2023_long <- theta_2023 |>
+  pivot_longer(cols = starts_with("Topic"), names_to = "Topic", values_to = "Probabilita")
+
+ggplot(theta_2023_long, aes(x = Topic, y = Doc_ID, fill = Probabilita)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(
+    title = "Heatmap: Post-Ceasefire Articles (September 2023)",
+    x = "Topic", y = "Document ID", fill = "Probability"
+  )
+```
+
+Alongside Topic 2, another prominent theme in post-ceasefire coverage is Topic 13 (religious appeals for prayer and peace), reflecting international calls for reconciliation following the end of hostilities.
+
+```{r composition_topic 2.2}
+# Wordcloud for Topic 2
+# Custom function to render wordclouds for either a single base topic or a 2x2 grid across geopolitical blocs in the covariate model
+wordcloud_confronto <- function(topic_scelto, da_togliere = NULL, modello = modello_meta_18, titolo = "") {
+  # Determine number of content covariate levels
+  n_gruppi <- length(modello$beta$logbeta)
+
+  # -------------------------------------------------------------------------
+  # CASE 1: MODEL WITHOUT COVARIATES (Single Wordcloud)
+  # -------------------------------------------------------------------------
+  if (n_gruppi == 1) {
+    log_probs <- modello$beta$logbeta[[1]][topic_scelto, ]
+    probs <- exp(log_probs)
+
+    mask <- !(modello$vocab %in% da_togliere)
+    df_words <- data.frame(word = modello$vocab[mask], prob = probs[mask])
+    df_words <- head(df_words[order(-df_words$prob), ], 40)
+
+    wordcloud(
+      words = df_words$word, freq = df_words$prob,
+      scale = c(3, 0.5), random.order = FALSE,
+      rot.per = 0.1, colors = brewer.pal(8, "GnBu")[3:8]
+    )
+
+    title(titolo,
+      cex.main = 1.5, col.main = "black", line = 3
+    )
+
+    # -------------------------------------------------------------------------
+    # CASE 2: META / COVARIATE MODEL (2x2 Wordcloud Grid)
+    # -------------------------------------------------------------------------
+  } else {
+    par(mfrow = c(2, 2), mar = c(1, 1, 3, 1))
+
+    nomi_gruppi <- c(
+      "Pro-Armenia Axis", "Pro-Azerbaijan Axis",
+      "Russia and CIS", "Rest of the World"
+    )
+
+    colori_gruppi <- list(
+      brewer.pal(8, "YlOrRd"),
+      brewer.pal(8, "GnBu"),
+      brewer.pal(8, "YlGn"),
+      brewer.pal(8, "PuRd")
+    )
+
+    for (i in 1:n_gruppi) {
+      log_probs <- modello$beta$logbeta[[i]][topic_scelto, ]
+      probs <- exp(log_probs)
+
+      mask <- !(modello$vocab %in% da_togliere)
+      df_words <- data.frame(word = modello$vocab[mask], prob = probs[mask])
+      df_words <- head(df_words[order(-df_words$prob), ], 20)
+
+      wordcloud(
+        words = df_words$word, freq = df_words$prob,
+        scale = c(3, 0.5), random.order = FALSE, rot.per = 0.1,
+        colors = colori_gruppi[[i]][3:8]
+      )
+
+      nome_plot <- if (i <= length(nomi_gruppi)) nomi_gruppi[i] else paste("Group", i)
+
+      title(nome_plot, cex.main = 1.5, col.main = "black", line = 1)
+    }
+
+    par(mfrow = c(1, 1))
+  }
+}
+
+wordcloud_confronto(2, da_togliere = NULL, modello = modello_base_20, titolo = "Topic 2 (Model Without Covariates)")
+```
+
+Another useful validation technique was performed using `quanteda` via Keyword-in-Context (`kwic()`). Specifically, we investigated why the word `"gray"` appeared prominently in Topic 14 (German domestic politics): context inspection confirmed that it referred to the *Grey Wolves*, a Turkish ultranationalist organization active in Europe whose violent demonstrations during the Nagorno-Karabakh conflict sparked political debate and bans in Germany.
+
+```{r composition_topic 14}
+wordcloud_confronto(14, NULL, modello = modello_base_20, "Topic 14 (Model Without Covariates)")
+
+# Create a quanteda corpus using the aligned texts (excluding removed documents)
+mio_corpus <- corpus(articles_NK_war_V2$Testo_Inglese[-removed])
+miei_tokens <- tokens(mio_corpus, remove_punct = TRUE, remove_symbols = TRUE)
+
+thoughts_topic14 <- findThoughts(modello_base_20, texts = articles_NK_war_V2$Testo_Inglese[-removed], topics = 14, n = 20)
+top_docs_idx_14 <- thoughts_topic14$index[[1]]
+risultato_gray <- kwic(miei_tokens[top_docs_idx_14], pattern = "gray", window = 15)
+head(risultato_gray)
+```
+
+This qualitative validation procedure helped verify topic interpretations across the model; only one illustrative example is shown here for brevity.
+
+---
+
+# Structural Model with Covariates
+
+## Specification and Motivation
+
+Whereas the base model treats all documents as drawn from a single homogeneous distribution, the structural model (`modello_meta_18`) incorporates contextual metadata through two distinct covariate mechanisms:
+
+1. **`prevalence` — Covariates on Topic Frequency:**  
+   Informs the model about *how often* each topic appears across documents. The free parameters are the regression coefficients $\gamma$ in the Logistic-Normal model for document topic proportions $\theta_d$. Here we include two variables:
+   * `conflict_phase`: Historical phase of the conflict ($4$ periods from 2020 to 2023), capturing the temporal evolution of the media agenda.
+   * `Polo_Geopolitico`: Geopolitical alignment of the news outlet ($4$ categories), capturing *how much* each bloc discusses each theme.
+   This allows topic prevalence (e.g., Turkey's Black Sea Grain Initiative in 2022) to vary dynamically across time and geopolitical actors.
+
+2. **`content` — Covariate on Lexical Framing:**  
+   Informs the model about *which words* are chosen to describe the same topic. The free parameters are the deviation vectors $\kappa_{k, y_d}$ that shift word distributions $\beta_{d,k}$ across levels of a categorical covariate. Here we specify `Polo_Geopolitico`, allowing the algorithm to estimate a distinct vocabulary per geopolitical bloc within every topic—thereby capturing *differential narrative framing*.
+
+Selecting $K = 18$ for the covariate model is supported by a separate `searchK()` run on the full model specification, loaded below.
+
+```{r searchk_load}
+# Optimal K search results for the covariate model (prevalence + content)
+k_search_results <- read_rds("C:/Users/giaco/OneDrive - Università degli Studi di Milano-Bicocca/Desktop/Antigravity/Text_mining_26/k__meta_results.rds")
+plot(k_search_results)
+```
+
+We now load the estimated structural model (`K = 18`, `prevalence = ~ conflict_phase + Polo_Geopolitico`, `content = ~ Polo_Geopolitico`).
+
+```{r meta_model_load}
+# Load final structural model
+modello_meta_18 <- readRDS("C:/Users/giaco/OneDrive - Università degli Studi di Milano-Bicocca/Desktop/Antigravity/Text_mining_26/modello_meta_full_18.rds")
+
+# Overview: expected proportions of the 18 topics in the structural model
+plot(modello_meta_18,
+  type = "summary", xlim = c(0, 0.3), text.cex = 0.8,
+  main = "Expected Topic Proportions (Structural Model, K=18)"
+)
+```
+
+## Interpretation of Topics and Correlations
+
+We examine the *covariance structure* among topics in the structural model with covariates.
+
+```{r meta_corr}
+# Topic correlation network across the 18 structural topics
+correlazioni_meta <- topicCorr(modello_meta_18)
+plot(correlazioni_meta,
+  vertex.label.cex = 0.9,
+  vertex.size = 5,
+  vertex.label.dist = 1.3,
+  vertex.label.color = "darkblue",
+  main = "Topic Correlation Network (Model With Covariates)"
+)
+```
+
+Notice that `modello_meta_18` exhibits fewer inter-topic edges than the base model. This is theoretically expected: the edges that survive in the structural model represent residual correlations between topics that the covariates ($X_d\gamma$) do not already explain—that is, intrinsic thematic associations rather than artifacts of publication date or outlet nationality.
+Inspecting the network reveals **three main discursive macro-areas** and a group of isolated topics:
+
+### 1. Battlefield Dynamics and Destabilization Cluster
+This is the densest and most cohesive sub-network in the graph, capturing raw frontline reporting and immediate tactical developments:
+
+* **Topic 2** — Military tactics and weaponry (*pretext, weaponri, tovuz, shusha, sabotag*), sharply polarized by source: the Pro-Baku axis frames events in terms of "punishment" and "enemy," whereas Russian/CIS sources emphasize "catastrophe" and calls for "dialogue."
+* **Topic 7** — Military operations and official spokespersons (*retaliatori, helicopt, stepanyan, shushan*), focusing on retaliatory strikes and official military briefings.
+* **Topic 16** — Collapse of stability and institutional clash (*erupt, truce, dissolv, destabil*), describing the breakdown of ceasefires and territorial equilibrium, which is also framed by the Pro-Baku axis through the lens of historical "genocide."
+* **Topic 17** — Curfews and diplomatic appeals (*pray, curfew, auspic, rama*), closely tied to wartime restrictions and institutional calls for restraint.
+
+### 2. Geopolitical, Historical, and Technological Macro-Ecosystem
+This broad network shows how the conflict is contextualized well beyond Nagorno-Karabakh's borders, intertwining military technology, regional alliances, and historical memory:
+
+* **Topic 4** — Technological warfare and air superiority (*baykar, aerial, modern, battlefield*), centered on tactical innovation driven by unmanned aerial vehicles (such as Turkish Bayraktar drones) and modern reconnaissance.
+* **Topic 12** — Turkish geopolitical activism (*erdoğan, ankara, iranian, jerusalem*), situating Ankara's diplomatic and military posture within the broader Middle Eastern geopolitical arena.
+* **Topic 10** — Historical roots and trauma (*extermin, deport, ottoman, empir*), where Pro-Armenia outlets emphasize "motherland" and "martyrs," while the international axis broadly connects the theme to "Kurdish" dynamics.
+* **Topic 3** — Prisoners of war and legal proceedings (*prison, suspect, vienna, charg*), covering war-crime investigations, formal charges, and the fate of detainees.
+* **Topic 11** — Economic and corporate impact (*financ, corpor, stock, accumul*), which Russian sources strongly associate with checkpoints and supply logistics (*food, cargo*).
+* **Topic 13** — Spiritual and humanitarian dimension (*grate, faith, mountain, vatican*), preserving the religious diplomacy and Catholic humanitarian appeals identified earlier.
+* **Topic 14** — Collateral and symbolic themes (*climat, sport, portray, sacrif*), blending European political reactions (e.g., Germany) with symbolic framing of the conflict.
+
+### 3. International Diplomacy and Peacekeeping Chain
+A sequence of linked nodes framing the conflict through international law and multilateral diplomacy:
+
+* **Topic 8** — Peacekeeping forces and security guarantees (*peacekeep, recognis, ammunit*), where the Pro-Armenia axis stresses "compromise" and "trust," while the Pro-Baku axis focuses on "counteroffensives."
+* **Topic 6** — International law (*icc, statut, peskov, ambassador*), covering the International Criminal Court (ICC) and bilateral Russian–Western diplomacy.
+
+### 4. Isolated Nodes: Humanitarian Crisis, Domestic Politics, and Noise
+Unlike the covariate-free model, several critical themes appear completely disconnected here, indicating that news outlets treat them as specialized, standalone narrative threads:
+
+* **Topic 18** — War in Ukraine and logistical hubs (*donetsk, kiev, volodymyr, grain*), heavily used by international outlets (*Rest of the World*) to link the Caucasus conflict with the war in Ukraine.
+* **Topic 9** — Humanitarian crisis and infrastructural blockade (*flour, hunger, lanto, ocampo*), strikingly isolated from frontline military topics, highlighting acute food shortages and starvation caused by road blockades, framed by the Pro-Armenia axis around "discrimination."
+* **Topic 1** — Domestic protests and crackdowns (*polic, arrest, protest, eurasian*), portraying street demonstrations, arrests, and political opposition in Armenia as a self-contained domestic narrative.
+* **Topic 15** — Electoral rivalry and sports news (*kocharyan, serzh, vote, poll*), a hybrid topic combining Armenian electoral politics (involving former presidents Kocharyan and Sargsyan) with residual football keywords from international media.
+* **Topic 5** — Disinformation and systemic narratives (*anniversari, misinform, systemat*), deployed differently across blocs: by Russian sources to discuss intelligence "secrets" and "risks," and by Western outlets to frame major global leaders (*biden, jinp*).
+
+### Semantic Coherence Diagnostic
+
+```{r meta_diag}
+# Semantic Coherence values for topics in the covariate model
+topicQuality(
+  model = modello_meta_18,
+  documents = docs_10$documents
+)
+```
+
+Topics with less negative semantic coherence values (such as Topic 6 and Topic 7) exhibit stronger internal cohesion, indicating that their top terms frequently co-occur within the same documents.
+
+## Framing Analysis: Narrative Differences Across Geopolitical Poles
+
+The `content` covariate enables us to visualize how opposing geopolitical blocs describe the *exact same topic* using different vocabularies. The `perspectives` plot contrasts the characteristic terms of two selected poles—with the Pro-Armenia Axis on the left and the Pro-Baku Axis on the right—while `wordcloud_confronto()` provides a four-way comparison across all geopolitical blocs.
+
+```{r framing_plot_4}
+# Topic 4 — Warfare, Military Technology, and Drones
+plot(modello_meta_18,
+  type = "perspectives",
+  topics = 4,
+  covarlevels = c("1_Pro_Armenia_Axis", "2_Pro_Baku_Axis"),
+  plabels = c("Pro-Armenia Axis", "Pro-Baku Axis"),
+  main = "Framing of Topic 4 (Warfare and Military Technology)",
+  text.cex = 1.1
+)
+
+# 2x2 Wordcloud across all 4 geopolitical poles
+wordcloud_confronto(4, NULL, modello = modello_meta_18)
+```
+
+Both visualizations clearly show that pro-Yerevan coverage emphasizes the deployment of Syrian mercenaries and concerns over Russian security guarantees amid the war in Ukraine, whereas pro-Baku coverage highlights its Turkish military partnership and European Union mediation.
+Equally noteworthy is that external actors (Russia and the Rest of the World) place heavy lexical emphasis on military drones—a technology largely downplayed in the direct framing of the belligerent nations themselves. In European and particularly German politics, controversy arose over Azerbaijan's use of these drones, as they were regarded as a technology potentially capable of threatening German security.
+
+## Agenda Setting: Who Talks About What?
+
+The `prevalence` covariate allows us to estimate the effect of each geopolitical bloc and conflict phase on the expected proportion of a given topic. We use `estimateEffect()` to obtain point estimates and $95\%$ confidence intervals for selected topics of interest.
+
+```{r agenda_setting}
+prep_effects <- estimateEffect(
+  formula = 1:18 ~ Polo_Geopolitico + conflict_phase,
+  stmobj = modello_meta_18,
+  metadata = meta_clean,
+  uncertainty = "Global"
+)
+```
+
+### Topic 8 — Peacekeeping and Mediation: Who Emphasizes It Most?
+
+```{r agenda_topic8}
+par(mar = c(5, 12, 4, 2))
+plot(prep_effects,
+  covariate = "Polo_Geopolitico",
+  model = modello_meta_18,
+  topics = 8,
+  method = "pointestimate",
+  main = "Prevalence of Topic 8 (Peacekeeping) During the 2023 Offensive",
+  moderator = "conflict_phase",
+  moderator.value = "4_Final_Offensive_Lachin_2023",
+  xlab = "Expected Topic Prevalence (\u03B8)",
+  labeltype = "custom",
+  custom.labels = c(
+    "Pro-Armenia Axis", "Pro-Azerbaijan Axis",
+    "Russia and CIS", "Rest of the World"
+  ),
+  xlim = c(0, 0.25)
+)
+```
+
+While all actors address mediation, the Russia/CIS bloc places by far the strongest emphasis on diplomacy and peacekeeping. This aligns with regional geopolitics, where Moscow positioned itself as the primary security arbiter between the two former Soviet republics and maintained a Russian peacekeeping contingent monitoring the ceasefire and the Lachin Corridor.
+
+### Topic 6 — Diplomacy: Distribution During Phase 1 (2020 War)
+
+```{r agenda_topic6}
+plot(prep_effects,
+  covariate = "Polo_Geopolitico",
+  model = modello_meta_18,
+  topics = 6,
+  method = "pointestimate",
+  main = "Prevalence of Topic 6 (Diplomacy) During the 2020 War",
+  moderator = "conflict_phase",
+  moderator.value = "1_War_2020",
+  xlab = "Expected Topic Prevalence (\u03B8)",
+  labeltype = "custom",
+  custom.labels = c(
+    "Pro-Armenia Axis", "Pro-Azerbaijan Axis",
+    "Russia and CIS", "Rest of the World"
+  ),
+  xlim = c(-0.1, 0.15)
+)
+```
+
+Once again, Russia and the CIS bloc emerge as the primary promoters of diplomatic framing during the initial 2020 war, whereas the remaining blocs devote substantially less relative attention to multilateral diplomacy in that early phase.
+
+### Topic 4 — Warfare: Distribution by Bloc During the Final 2023 Offensive
+
+```{r agenda_topic4}
+plot(prep_effects,
+  covariate = "Polo_Geopolitico",
+  model = modello_meta_18,
+  topics = 4,
+  method = "pointestimate",
+  main = "Prevalence of Topic 4 (Warfare) During 2023",
+  moderator = "conflict_phase",
+  moderator.value = "4_Final_Offensive_Lachin_2023",
+  xlab = "Expected Topic Prevalence (\u03B8)",
+  labeltype = "custom",
+  custom.labels = c(
+    "Pro-Armenia Axis", "Pro-Azerbaijan Axis",
+    "Russia and CIS", "Rest of the World"
+  ),
+  xlim = c(-0.1, 0.15)
+)
+```
+
+Finally, coverage of the 2023 offensive under Topic 4 is markedly lower among Pro-Armenia and Russian outlets—reflecting strategic silence around military defeat for the former and diplomatic failure for the latter—whereas Azerbaijan and international media cover the territorial outcome extensively.
+
+---
+
+# Model Comparison
+
+## Thematic Alignment Between Models (Jensen-Shannon Divergence)
+
+Before comparing model quality metrics, we must address a structural difference: the two models contain different numbers of topics ($K = 20$ vs. $K = 18$), precluding a direct one-to-one comparison. To align them, we compute the **Jensen-Shannon Divergence (JSD)** across topic-word probability distributions to build a cross-model similarity matrix.
+
+JSD (Lin, 1991), a symmetrized and smoothed version of Kullback-Leibler divergence bounded in $[0, 1]$, quantifies how far apart two probability distributions are: values near $0$ indicate nearly identical topics, whereas values near $1$ indicate completely distinct vocabularies. This alignment allows us to match corresponding topics across models using the `philentropy` package.
+
+```{r jsd_alignment}
+# Extract beta distributions for both models (Note: modello_meta_18 has one beta matrix per content covariate level)
+beta_base <- exp(modello_base_20$beta$logbeta[[1]])
+beta_meta <- exp(modello_meta_18$beta$logbeta[[1]])
+
+# JSD distance matrix (20 x 18)
+jsd_matrix <- matrix(NA, nrow = 20, ncol = 18)
+for (i in 1:20) {
+  for (j in 1:18) {
+    m <- rbind(beta_base[i, ], beta_meta[j, ])
+    jsd_matrix[i, j] <- JSD(m)
+  }
+}
+
+# Heatmap of the alignment matrix
+jsd_df <- melt(jsd_matrix)
+colnames(jsd_df) <- c("Topic_Base", "Topic_Meta", "JSD")
+
+ggplot(jsd_df, aes(x = factor(Topic_Meta), y = factor(Topic_Base), fill = JSD)) +
+  geom_tile() +
+  scale_fill_gradient(low = "darkred", high = "lightyellow", name = "JSD\n(0 = identical)") +
+  geom_text(aes(label = round(JSD, 2)), size = 2.5) +
+  theme_minimal(base_size = 11) +
+  labs(
+    title = "Jensen-Shannon Divergence Matrix Between Topics",
+    subtitle = "Thematic Alignment: Model Without Covariates (K=20) vs. Model With Covariates (K=18)",
+    x = "Model With Covariates (K=18)",
+    y = "Model Without Covariates (K=20)"
+  )
+```
+
+Darker cells ($\text{JSD} \approx 0$) identify the closest topic matches across the two models. The table below reports, for each topic in the full STM model, its closest counterpart in the base model.
+
+```{r jsd_table}
+(jsd_df_tbl <- jsd_df %>%
+  group_by(Topic_Meta) %>%
+  slice_min(JSD, n = 1) %>%
+  rename(
+    "Model With Covariates (K=18)" = Topic_Meta,
+    "Model Without Covariates (K=20)" = Topic_Base,
+    "JSD" = JSD
+  ))
+```
+
+Alignment works cleanly for most topics (for example, Topics 13 and 17—Vatican diplomacy and international diplomatic appeals—match with very low divergence), while divergences arise where covariate conditioning separates blended themes.
+
+## Comparison of Topics Related to the War in Ukraine
+
+For instance, Topic 18 in the full STM model (War in Ukraine) does not map onto a single exact counterpart in the base model because the `content` covariate separates bloc-specific framing—such as "special military operation" vocabulary in the Russia/CIS pole versus broader geopolitical coverage in the Rest of the World—whereas the base model blends those terms with general warfare topics like Topic 4.
+Below, we compare Topic 18 (covariate model) and Topic 19 (base model), excluding the dominant terms `"russia"` and `"ukrain"` so that subtle framing differences are clearly visible.
+
+```{r grafico_covariate}
+# Wordcloud for Topic 18 in the covariate model (War in Ukraine)
+wordcloud_confronto(18, da_togliere = c("russia", "ukrain"), modello = modello_meta_18)
+```
+
+```{r confronto_ucraina}
+# Wordcloud for Topic 19 in the base model without covariates (War in Ukraine)
+wordcloud_confronto(19, da_togliere = c("russia", "ukrain"), modello = modello_base_20, "Topic 19 (Model Without Covariates)")
+```
+
+Once again, this comparison highlights how the base model *cannot* disentangle geopolitical nuances and actor-specific framing across media blocs.
+
+---
+
+## Residual Comparison
+
+A key measure of explanatory adequacy is **residual dispersion** (`checkResiduals()`), which compares the empirical variance of word counts against the variance predicted by the fitted topic model. Dispersion values close to $1$ indicate a well-calibrated fit, whereas values substantially greater than $1$ signal *overdispersion*—residual corpus variance not captured by the estimated topic structure.
+
+```{r residuals_comparison}
+residui_base <- checkResiduals(modello_base_20, docs_10$documents)
+residui_meta <- checkResiduals(modello_meta_18, docs_10$documents)
+
+(guadagno <- round((1 - residui_meta$dispersion / residui_base$dispersion) * 100, 1))
+```
+
+The full STM model achieves an $11\%$ reduction in residual dispersion. This confirms that incorporating geopolitical alignment and conflict phase helps predict document word distributions more accurately, capturing structured variance that the covariate-free model cannot explain.
+
+---
+
+## Partial Comparison: Coherence vs. Exclusivity
+
+*Exclusivity* cannot be computed directly for models with a `content` covariate, because each geopolitical pole maintains its own topic-word distribution $\beta_{d,k}$, making cross-topic word exclusivity undefined across multiple vocabularies. However, we can compare **Semantic Coherence** across both models to ensure that adding covariates does not degrade internal topic cohesion.
+
+```{r coherence_comparison, fig.width=9, fig.height=5}
+coh_base <- semanticCoherence(modello_base_20, docs_10$documents)
+exc_base <- exclusivity(modello_base_20)
+coh_meta <- semanticCoherence(modello_meta_18, docs_10$documents)
+
+df_diag <- data.frame(
+  Coherence   = c(coh_base, coh_meta),
+  Exclusivity = c(exc_base, rep(NA, 18)),
+  Modello     = rep(c("Model Without Covariates", "Model With Covariates"), c(20, 18))
+)
+
+ggplot(df_diag, aes(x = Coherence, y = Exclusivity, color = Modello)) +
+  geom_point(
+    size = 3, alpha = 0.75,
+    data = subset(df_diag, Modello == "Model Without Covariates")
+  ) +
+  geom_vline(
+    xintercept = mean(coh_meta),
+    color = "darkred", linetype = "dashed", linewidth = 1
+  ) +
+  ggplot2::annotate("text",
+    x = mean(coh_meta) + 0.4,
+    y = max(exc_base, na.rm = TRUE) * 0.95,
+    label = paste0(
+      "Mean Coherence\nModel With Covariates: ",
+      round(mean(coh_meta), 1)
+    ),
+    color = "darkred", size = 3.5, hjust = 0
+  ) +
+  scale_color_manual(values = c("Model Without Covariates" = "gray50")) +
+  theme_minimal(base_size = 11) +
+  labs(
+    title    = "Partial Comparison: Coherence vs. Exclusivity",
+    subtitle = "Exclusivity is not directly defined for the STM model with content covariates",
+    x        = "Semantic Coherence (less negative values indicate higher cohesion)",
+    y        = "Exclusivity — FREX"
+  )
+```
+
+The dashed red line indicates the mean Semantic Coherence of the full STM model. The gray points (topics from the base model) cluster comparably around this benchmark, confirming that adding covariates preserves semantic cohesion despite the additional parameter complexity.
+Note that direct comparison of raw Coherence scores across models with different $K$ should be interpreted cautiously, as Coherence naturally tends to increase when $K$ is smaller because broader topics encompass more frequent word co-occurrences.
+
+---
+
+# Conclusions
+
+Our probabilistic investigation of international media coverage surrounding the Nagorno-Karabakh conflict demonstrates the effectiveness of Structural Topic Modelling not only in uncovering semantically distinct narratives, but in anchoring their chronological and geopolitical dynamics through structural covariates. While the $K = 20$ base model enabled an unconstrained exploration of the thematic landscape, the $K = 18$ structural model—incorporating `conflict_phase` and `Polo_Geopolitico` in prevalence and `Polo_Geopolitico` in lexical content—made it possible to measure differential framing and agenda setting across geopolitical blocs.
+
+These analyses revealed strategic framing patterns among the parties involved that extend beyond celebrating military or diplomatic gains to include strategic omission: media silence surrounding setbacks, as observed in Russian coverage of peacekeeping failures (Topic 8) and Armenian coverage of the 2023 offensive (Topic 4).
+
+At the same time, we acknowledge the methodological limitations of our study stemming from computational constraints, web-scraping restrictions, and automated machine translation. These factors resulted in an overrepresentation of European sources (particularly German and Italian outlets) and reliance on largely automated translation, which inevitably strips away subtle linguistic nuances (recalling that "to translate" and "to betray"—*tradurre* and *tradire*—share the same etymology).
+
+Ultimately, this study serves as a replicable methodological blueprint: *the STM framework combining geopolitical and temporal covariates can be applied to any conflict characterized by pluralistic media coverage*, providing a rigorous quantitative tool for measuring how wars and crises are narrated across global spheres of influence.
+
+---
+
+# Bibliography
+* Roberts, M. E., Stewart, B. M., & Airoldi, E. M. (2016). A model of text for experimentation in the social sciences. *Journal of the American Statistical Association*, 111(515), 988–1003.
+* Roberts, M. E., Stewart, B. M., & Tingley, D. (2019). stm: An R Package for Structural Topic Models. *Journal of Statistical Software*, 91(2), 1–40.
+* Benoit, K., et al. (2018). quanteda: An R package for the quantitative analysis of textual data. *Journal of Open Source Software*, 3(30), 774.
+* Arora, S., Ge, R., & Moitra, A. (2012). Learning topic models—going beyond SVD. In *Foundations of Computer Science (FOCS)*, 447–456.
+* Blei, D. M., Ng, A. Y., & Jordan, M. I. (2003). Latent Dirichlet allocation. *Journal of Machine Learning Research*, 3(Jan), 993–1022.
+* Blei, D. M., & Lafferty, J. D. (2007). A Correlated Topic Model of Science. *The Annals of Applied Statistics*, 1(1), 17–35.
+* Mimno, D., Wallach, H., Talley, E., Leenders, M., & McCallum, A. (2011). Optimizing semantic coherence in topic models. In *Proceedings of the 2011 Conference on Empirical Methods in Natural Language Processing*, 262–272.
+* Moreno Ocampo, L. (2023). *Expert Opinion: Genocide against Armenians in 2023*. August 7, 2023.
+* Lin, J. (1991). Divergence measures based on the Shannon entropy. *IEEE Transactions on Information Theory*, 37(1), 145–151.
+
+---
+
+# Attachments
+
+Click the button below to download all Python scripts used for news scraping and covariate extraction:
+
+```{r download-button, echo=FALSE, warning=FALSE, message=FALSE}
+download_file(
+  path = "Script Python scraping notizie.zip",
+  output_name = "Python_News_Scraping_Scripts",
+  button_label = "Download ZIP Folder",
+  button_type = "primary",
+  has_icon = TRUE,
+  icon = "fa fa-download"
+)
+```
